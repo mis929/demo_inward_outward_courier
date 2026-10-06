@@ -1,20 +1,23 @@
--- Migration: Auto Transition Engine for Courier FMS
--- Description: Automatically checks for expired TATs and advances workflow stages where configured.
+-- Migration: Escalation Engine for Courier FMS
+-- Description: Automatically checks for expired TATs and records escalations (does not auto-complete).
 -- Instructions: Run this in the Supabase SQL Editor, or apply via Supabase CLI.
 -- Requires pg_cron extension if you want to run it on a schedule.
 
--- 1. Create the function to evaluate TAT and advance records
-CREATE OR REPLACE FUNCTION public.evaluate_and_advance_tats()
+-- Ensure escalation tracking column exists in fms_stage_instances
+ALTER TABLE public.fms_stage_instances ADD COLUMN IF NOT EXISTS escalated_at timestamp with time zone;
+ALTER TABLE public.fms_stage_instances ADD COLUMN IF NOT EXISTS escalation_level integer DEFAULT 0;
+
+-- 1. Create the function to evaluate TAT and record escalations
+CREATE OR REPLACE FUNCTION public.evaluate_and_escalate_tats()
 RETURNS integer AS $$
 DECLARE
-  advanced_count integer := 0;
+  escalated_count integer := 0;
   instance RECORD;
-  next_stage RECORD;
   current_now timestamp with time zone;
 BEGIN
   current_now := now();
 
-  -- Find all active stage instances that are overdue
+  -- Find all active stage instances that are overdue and haven't been escalated yet (or ready for next escalation level)
   FOR instance IN
     SELECT 
       fsi.id as instance_id,
@@ -28,65 +31,38 @@ BEGIN
     WHERE fsi.status = 'active'
       AND fsi.planned_at IS NOT NULL
       AND fsi.planned_at < current_now
+      AND (fsi.escalated_at IS NULL OR fsi.escalated_at < current_now - interval '4 hours')
   LOOP
-    -- Mark current as completed (AUTO-TRANSITION)
+    -- Mark current as escalated (DOES NOT AUTO-TRANSITION)
     UPDATE fms_stage_instances
-    SET status = 'completed',
-        completed_at = current_now,
-        completed_by = NULL,
-        completion_notes = 'Auto-transitioned due to TAT expiration.'
+    SET escalated_at = current_now,
+        escalation_level = COALESCE(escalation_level, 0) + 1
     WHERE id = instance.instance_id;
 
     -- Audit log
     INSERT INTO audit_logs (record_id, action, old_value, new_value)
-    VALUES (instance.record_id, 'AUTO_STAGE_COMPLETED', jsonb_build_object('stage_id', instance.stage_id), '{"reason": "TAT expired"}');
+    VALUES (
+      instance.record_id, 
+      'STAGE_ESCALATED', 
+      jsonb_build_object('stage_id', instance.stage_id), 
+      jsonb_build_object('reason', 'TAT expired', 'planned_at', instance.planned_at)
+    );
 
-    -- Find next stage
-    SELECT * INTO next_stage 
-    FROM workflow_stages 
-    WHERE workflow_id = instance.workflow_id 
-      AND stage_number > instance.stage_number 
-    ORDER BY stage_number ASC 
-    LIMIT 1;
+    -- Log history
+    INSERT INTO fms_stage_history (record_id, stage_id, action, old_status, new_status, notes)
+    VALUES (
+      instance.record_id, 
+      instance.stage_id, 
+      'ESCALATION_TRIGGERED', 
+      'active', 
+      'active', 
+      'TAT threshold crossed. Escalation recorded. User must manually complete the stage.'
+    );
 
-    IF next_stage.id IS NOT NULL THEN
-      -- Advance record
-      UPDATE fms_records
-      SET current_stage_id = next_stage.id,
-          updated_at = current_now
-      WHERE id = instance.record_id;
-
-      -- Create new instance
-      INSERT INTO fms_stage_instances (record_id, stage_id, status, started_at, planned_at, tat_hours)
-      VALUES (
-        instance.record_id, 
-        next_stage.id, 
-        'active', 
-        current_now, 
-        current_now + (COALESCE(next_stage.tat_hours, 24) || ' hours')::interval,
-        next_stage.tat_hours
-      );
-
-      -- Log history
-      INSERT INTO fms_stage_history (record_id, stage_id, action, old_status, new_status, notes)
-      VALUES (instance.record_id, next_stage.id, 'STAGE_ADVANCED', 'active', 'active', 'Automatically transitioned due to TAT timeout.');
-
-    ELSE
-      -- Complete workflow
-      UPDATE fms_records
-      SET status = 'completed',
-          completed_at = current_now,
-          updated_at = current_now
-      WHERE id = instance.record_id;
-
-      INSERT INTO fms_stage_history (record_id, stage_id, action, old_status, new_status, notes)
-      VALUES (instance.record_id, instance.stage_id, 'WORKFLOW_COMPLETED', 'active', 'completed', 'Automatically completed. No further stages.');
-    END IF;
-
-    advanced_count := advanced_count + 1;
+    escalated_count := escalated_count + 1;
   END LOOP;
 
-  RETURN advanced_count;
+  RETURN escalated_count;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -96,5 +72,5 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 /*
 CREATE EXTENSION IF NOT EXISTS pg_cron;
-SELECT cron.schedule('fms_tat_auto_advance', '*/15 * * * *', 'SELECT public.evaluate_and_advance_tats();');
+SELECT cron.schedule('fms_tat_escalation', '*/15 * * * *', 'SELECT public.evaluate_and_escalate_tats();');
 */
