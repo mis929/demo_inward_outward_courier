@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Database, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
+import { Check, Database, ExternalLink, Globe, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { seedInitialDatabase } from '../lib/fmsService'
 
 interface SetupViewProps {
@@ -47,6 +47,19 @@ export function SetupView({ onRefreshAll }: SetupViewProps) {
           <p>
             Connected to Supabase project <code className="project-code">upmmsgvbtkxbjjnttrzn</code> with full TypeScript type safety.
           </p>
+          <div style={{ marginTop: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem' }}>
+            <Globe size={14} style={{ color: '#2563eb' }} />
+            <span style={{ color: '#64748b' }}>Live Deployment:</span>
+            <a
+              href="https://courierfms.vercel.app"
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: '#2563eb', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}
+            >
+              https://courierfms.vercel.app
+              <ExternalLink size={12} />
+            </a>
+          </div>
         </div>
 
         <button className="btn-primary" onClick={handleSeed} disabled={seeding}>
