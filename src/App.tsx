@@ -14,7 +14,7 @@ import {
   seedInitialDatabase,
 } from './lib/fmsService'
 import type { CourierAgent, Department, RecordWithDetails, Workflow, WorkflowStage } from './lib/fmsService'
-import { Navbar } from './components/Navbar'
+import { Sidebar, FmsRoute } from './components/Sidebar'
 import { StatsCards } from './components/StatsCards'
 import { StagePipeline } from './components/StagePipeline'
 import { RecordsTable } from './components/RecordsTable'
@@ -104,7 +104,7 @@ function WorkspaceScreen({
   userId: string
   onSignOut: () => void
 }) {
-  const [activeTab, setActiveTab] = useState<'outward' | 'inward' | 'agents' | 'setup'>('outward')
+  const [activeRoute, setActiveRoute] = useState<FmsRoute>('outward_all')
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [stages, setStages] = useState<WorkflowStage[]>([])
   const [courierAgents, setCourierAgents] = useState<CourierAgent[]>([])
@@ -144,9 +144,9 @@ function WorkspaceScreen({
   }, [])
 
   // Current active workflow and its stages
-  const currentWorkflowDef = activeTab === 'outward' ? DEFAULT_WORKFLOWS[0] : DEFAULT_WORKFLOWS[1]
+  const currentWorkflowDef = activeRoute.includes('outward') ? DEFAULT_WORKFLOWS[0] : DEFAULT_WORKFLOWS[1]
   const currentDbWorkflow = workflows.find(w =>
-    activeTab === 'outward' ? w.name.toLowerCase().includes('outward') : w.name.toLowerCase().includes('inward')
+    activeRoute.includes('outward') ? w.name.toLowerCase().includes('outward') : w.name.toLowerCase().includes('inward')
   )
 
   const currentWorkflowStages = stages.filter(s =>
@@ -169,7 +169,7 @@ function WorkspaceScreen({
     if (currentDbWorkflow) return r.workflow_id === currentDbWorkflow.id
     // Fallback: check metadata type
     const meta = (typeof r.metadata === 'object' && r.metadata !== null) ? (r.metadata as Record<string, unknown>) : {}
-    return (meta.workflow_type as string) === activeTab || true
+    return (meta.workflow_type as string) === (activeRoute.includes('inward') ? 'inward' : 'outward')
   })
 
   // Compute stage counts
@@ -200,7 +200,7 @@ function WorkspaceScreen({
       setWorkflows(newWf)
       setStages(newSt)
       const targetWf = newWf.find(w =>
-        activeTab === 'outward' ? w.name.toLowerCase().includes('outward') : w.name.toLowerCase().includes('inward')
+        activeRoute.includes('outward') ? w.name.toLowerCase().includes('outward') : w.name.toLowerCase().includes('inward')
       )
       wfId = targetWf?.id
       fmsTypeId = targetWf?.fms_type_id
@@ -218,7 +218,7 @@ function WorkspaceScreen({
       const num = Number(r.display_record_number)
       return isNaN(num) ? 0 : num
     })
-    const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : (activeTab === 'outward' ? 616 : 927)
+    const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : (activeRoute.includes('outward') ? 616 : 927)
 
     const res = await createRecord({
       workflow_id: wfId,
@@ -229,7 +229,7 @@ function WorkspaceScreen({
       metadata: {
         ...formValues,
         sheet_record_number: nextNumber,
-        workflow_type: activeTab,
+        workflow_type: activeRoute.includes('inward') ? 'inward' : 'outward',
         created_at_client: new Date().toISOString(),
       },
     })
@@ -266,12 +266,16 @@ function WorkspaceScreen({
   }
 
   return (
-    <div className="fms-app-layout">
-      <Navbar
-        activeTab={activeTab}
-        onSelectTab={tab => {
-          setActiveTab(tab)
+    <div className="fms-app-layout-grid">
+      <Sidebar
+        activeRoute={activeRoute}
+        onSelectRoute={route => {
+          setActiveRoute(route)
           setSelectedStage(null)
+          if (route === 'outward_new' || route === 'inward_new') {
+            setIsCreateOpen(true)
+            setActiveRoute(route === 'outward_new' ? 'outward_all' : 'inward_all')
+          }
         }}
         userEmail={email}
         onSignOut={onSignOut}
@@ -279,10 +283,10 @@ function WorkspaceScreen({
         refreshing={refreshing}
       />
 
-      <main className="fms-main-content">
-        {activeTab === 'setup' ? (
+      <main className="fms-main-content-grid">
+        {activeRoute === 'admin_setup' ? (
           <SetupView onRefreshAll={loadData} />
-        ) : activeTab === 'agents' ? (
+        ) : activeRoute === 'agents' ? (
           <CourierAgentsView agents={courierAgents} onRefresh={loadData} />
         ) : (
           <>
@@ -318,7 +322,7 @@ function WorkspaceScreen({
 
       {/* New Record Modal */}
       <CreateRecordModal
-        workflowType={activeTab === 'inward' ? 'inward' : 'outward'}
+        workflowType={activeRoute.includes('inward') ? 'inward' : 'outward'}
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
         onSubmit={handleCreateRecord}
