@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowRight, Eye, Filter, Plus, Search } from 'lucide-react'
 import type { RecordWithDetails, WorkflowStage } from '../lib/fmsService'
+import { determineOverdueStatus } from '../lib/tatEngine'
 
 interface RecordsTableProps {
   records: RecordWithDetails[]
@@ -114,6 +115,7 @@ export function RecordsTable({
                 <th>Contents / Item</th>
                 <th>Carrier & Docket</th>
                 <th>Current Stage</th>
+                <th>TAT / SLA</th>
                 <th>Status</th>
                 <th>Created</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
@@ -123,6 +125,11 @@ export function RecordsTable({
               {filtered.map(r => {
                 const stage = r.current_stage_id ? stageMap.get(r.current_stage_id) : null
                 const isCompleted = r.status === 'completed'
+                const curInstance = r.stage_instances?.find(i => i.stage_id === stage?.id)
+                let tatStatus = 'Active'
+                if (curInstance) {
+                  tatStatus = determineOverdueStatus(curInstance.planned_at, curInstance.completed_at)
+                }
 
                 return (
                   <tr key={r.id}>
@@ -164,6 +171,13 @@ export function RecordsTable({
                         </span>
                       ) : (
                         <span className="stage-pill">Initial Stage</span>
+                      )}
+                    </td>
+                    <td>
+                      {!isCompleted && tatStatus !== 'Active' && (
+                        <span className={`status-pill ${tatStatus.replace(/\s+/g, '-').toLowerCase()}`} style={{ whiteSpace: 'nowrap', padding: '4px 8px', fontSize: '11px', borderRadius: '12px' }}>
+                          {tatStatus}
+                        </span>
                       )}
                     </td>
                     <td>

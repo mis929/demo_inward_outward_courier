@@ -173,6 +173,13 @@ export async function createRecord(params: {
   if (!supabase) return { success: false, error: 'Database not connected' }
 
   try {
+    const { data: stageInfo } = await supabase.from('workflow_stages').select('tat_hours').eq('id', params.initial_stage_id).single()
+    const tatHours = stageInfo?.tat_hours || 24;
+    const { calculatePlannedDate } = await import('./tatEngine');
+    
+    const now = new Date().toISOString();
+    const plannedAt = calculatePlannedDate(now, tatHours);
+
     const { data: newRecord, error: recError } = await supabase
       .from('fms_records')
       .insert({
@@ -187,19 +194,17 @@ export async function createRecord(params: {
       .select()
       .single()
 
-    if (recError || !newRecord) {
-      return { success: false, error: recError?.message || 'Failed to create record' }
-    }
+    if (recError || !newRecord) return { success: false, error: recError?.message || 'Failed to create record' }
 
-    // Create stage instance for initial stage
     await supabase.from('fms_stage_instances').insert({
       record_id: newRecord.id,
       stage_id: params.initial_stage_id,
       status: 'active',
-      started_at: new Date().toISOString(),
+      started_at: now,
+      planned_at: plannedAt,
+      tat_hours: tatHours
     })
 
-    // Log history
     await supabase.from('fms_stage_history').insert({
       record_id: newRecord.id,
       stage_id: params.initial_stage_id,
@@ -207,6 +212,13 @@ export async function createRecord(params: {
       new_status: 'active',
       performed_by: params.user_id || null,
       notes: 'Initial record created at stage 1',
+    })
+    
+    await supabase.from('audit_logs').insert({
+      record_id: newRecord.id,
+      action: 'CREATE',
+      new_value: params.metadata as Json,
+      performed_by: params.user_id || null
     })
 
     return { success: true, record: newRecord }
@@ -216,7 +228,6 @@ export async function createRecord(params: {
   }
 }
 
-// Advance record to next stage
 export async function advanceRecordStage(params: {
   record_id: string
   current_stage_id: string
@@ -228,8 +239,8 @@ export async function advanceRecordStage(params: {
 
   try {
     const now = new Date().toISOString()
+    const { calculatePlannedDate } = await import('./tatEngine');
 
-    // 1. Mark current stage instance as completed
     await supabase
       .from('fms_stage_instances')
       .update({
@@ -241,21 +252,28 @@ export async function advanceRecordStage(params: {
       .eq('record_id', params.record_id)
       .eq('stage_id', params.current_stage_id)
 
-    // 2. If there is a next stage, activate it
+    await supabase.from('audit_logs').insert({
+      record_id: params.record_id,
+      action: 'STAGE_COMPLETED',
+      old_value: { stage_id: params.current_stage_id },
+      new_value: { stage_id: params.next_stage_id || 'COMPLETED' },
+      performed_by: params.user_id || null
+    })
+
     if (params.next_stage_id) {
-      await supabase
-        .from('fms_records')
-        .update({
-          current_stage_id: params.next_stage_id,
-          updated_at: now,
-        })
-        .eq('id', params.record_id)
+      const { data: stageInfo } = await supabase.from('workflow_stages').select('tat_hours').eq('id', params.next_stage_id).single()
+      const tatHours = stageInfo?.tat_hours || 24;
+      const plannedAt = calculatePlannedDate(now, tatHours);
+
+      await supabase.from('fms_records').update({ current_stage_id: params.next_stage_id, updated_at: now }).eq('id', params.record_id)
 
       await supabase.from('fms_stage_instances').insert({
         record_id: params.record_id,
         stage_id: params.next_stage_id,
         status: 'active',
         started_at: now,
+        planned_at: plannedAt,
+        tat_hours: tatHours
       })
 
       await supabase.from('fms_stage_history').insert({
@@ -268,15 +286,7 @@ export async function advanceRecordStage(params: {
         notes: params.notes || 'Moved to next stage',
       })
     } else {
-      // Completed full workflow!
-      await supabase
-        .from('fms_records')
-        .update({
-          status: 'completed',
-          completed_at: now,
-          updated_at: now,
-        })
-        .eq('id', params.record_id)
+      await supabase.from('fms_records').update({ status: 'completed', completed_at: now, updated_at: now }).eq('id', params.record_id)
 
       await supabase.from('fms_stage_history').insert({
         record_id: params.record_id,
@@ -296,7 +306,6 @@ export async function advanceRecordStage(params: {
   }
 }
 
-// Seed initial system workflows and master data if tables are empty
 export async function seedInitialDatabase(): Promise<{ success: boolean; message: string }> {
   if (!supabase) return { success: false, message: 'Supabase client not initialized' }
 
@@ -384,6 +393,86 @@ export async function seedInitialDatabase(): Promise<{ success: boolean; message
           description: st.desc,
           is_active: true,
         })
+      }
+    }
+
+    
+    // Ensure outward stages exist
+    const { data: stOut } = await supabase.from('workflow_stages').select('id, stage_number').eq('workflow_id', outwardWfId);
+    const outStage1 = stOut?.find(s => s.stage_number === 1)?.id;
+    
+    // Seed fields for outward stage 1 if missing
+    if (outStage1) {
+      const { count } = await supabase.from('workflow_fields').select('id', { count: 'exact', head: true }).eq('stage_id', outStage1);
+      if (count === 0) {
+        const fields = [
+          { field_key: 'courier_agent_id', field_label: 'Courier Agent', data_type: 'dropdown', is_required: true },
+          { field_key: 'requested_by', field_label: 'Requested By', data_type: 'employee', is_required: true },
+          { field_key: 'sample_detail', field_label: 'Sample Detail', data_type: 'text', is_required: true },
+          { field_key: 'company_id', field_label: 'Company Name', data_type: 'dropdown', is_required: true },
+          { field_key: 'contact_person', field_label: 'Contact Person', data_type: 'text', is_required: true },
+          { field_key: 'city', field_label: 'City', data_type: 'text', is_required: true },
+          { field_key: 'contact_number', field_label: 'Contact Number', data_type: 'phone', is_required: false },
+          { field_key: 'address', field_label: 'Address', data_type: 'textarea', is_required: false },
+          { field_key: 'business_card', field_label: 'Business Card', data_type: 'image', is_required: false },
+          { field_key: 'courier_type', field_label: 'Courier Type', data_type: 'dropdown', is_required: true },
+          { field_key: 'customer_send', field_label: 'Customer Send', data_type: 'boolean', is_required: false },
+          { field_key: 'plastic', field_label: 'Plastic', data_type: 'boolean', is_required: false },
+          { field_key: 'foil', field_label: 'Foil', data_type: 'boolean', is_required: false },
+          { field_key: 'aluminium', field_label: 'Aluminium', data_type: 'boolean', is_required: false },
+          { field_key: 'accounts', field_label: 'Accounts', data_type: 'boolean', is_required: false },
+        ];
+        let order = 1;
+        for (const f of fields) {
+          await supabase.from('workflow_fields').insert({
+            workflow_id: outwardWfId,
+            stage_id: outStage1,
+            field_key: f.field_key,
+            field_label: f.field_label,
+            data_type: f.data_type,
+            is_required: f.is_required,
+            display_order: order++,
+            is_active: true,
+            configuration: {}
+          });
+        }
+      }
+    }
+
+    // Ensure inward stages exist
+    const { data: stIn } = await supabase.from('workflow_stages').select('id, stage_number').eq('workflow_id', inwardWfId);
+    const inStage1 = stIn?.find(s => s.stage_number === 1)?.id;
+    
+    // Seed fields for inward stage 1 if missing
+    if (inStage1) {
+      const { count } = await supabase.from('workflow_fields').select('id', { count: 'exact', head: true }).eq('stage_id', inStage1);
+      if (count === 0) {
+        const fields = [
+          { field_key: 'docket_number', field_label: 'Docket Number', data_type: 'text', is_required: true },
+          { field_key: 'dispatch_date', field_label: 'Dispatch Date', data_type: 'date', is_required: false },
+          { field_key: 'courier_agent_id', field_label: 'Courier Agent', data_type: 'dropdown', is_required: true },
+          { field_key: 'agent_number', field_label: 'Agent Number', data_type: 'text', is_required: false },
+          { field_key: 'supplier_id', field_label: 'Supplier', data_type: 'dropdown', is_required: true },
+          { field_key: 'from_location', field_label: 'From Location', data_type: 'text', is_required: true },
+          { field_key: 'material', field_label: 'Material', data_type: 'text', is_required: true },
+          { field_key: 'department_id', field_label: 'Department', data_type: 'dropdown', is_required: true },
+          { field_key: 'delivery_type', field_label: 'Delivery Type', data_type: 'dropdown', is_required: true },
+          { field_key: 'image_upload', field_label: 'Image Upload', data_type: 'image', is_required: false },
+        ];
+        let order = 1;
+        for (const f of fields) {
+          await supabase.from('workflow_fields').insert({
+            workflow_id: inwardWfId,
+            stage_id: inStage1,
+            field_key: f.field_key,
+            field_label: f.field_label,
+            data_type: f.data_type,
+            is_required: f.is_required,
+            display_order: order++,
+            is_active: true,
+            configuration: {}
+          });
+        }
       }
     }
 
