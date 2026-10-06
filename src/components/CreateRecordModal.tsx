@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Clock, Info, X } from 'lucide-react'
+import { Clock, X } from 'lucide-react'
 import type { CourierAgent, Department } from '../lib/fmsService'
 
 interface CreateRecordModalProps {

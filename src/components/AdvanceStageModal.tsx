@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ArrowRight, CheckCircle, Clock, Info, X } from 'lucide-react'
 import type { RecordWithDetails, WorkflowStage } from '../lib/fmsService'
-import { calculatePlannedDate, determineOverdueStatus } from '../lib/tatEngine'
+import { calculatePlannedDate } from '../lib/tatEngine'
 
 interface AdvanceStageModalProps {
   record: RecordWithDetails | null
@@ -35,7 +35,6 @@ export function AdvanceStageModal({
   const currentInstance = record.stage_instances?.find(i => i.stage_id === currentStage?.id)
   const plannedAt = currentInstance?.planned_at || null
 
-  const nowStr = new Date().toLocaleString()
   const nextPlanned = nextStage ? new Date(calculatePlannedDate(new Date(), nextStage.tat_hours || 24)).toLocaleString() : null
 
   async function handleConfirm() {

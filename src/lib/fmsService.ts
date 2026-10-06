@@ -218,7 +218,7 @@ export async function createRecord(params: {
       record_id: newRecord.id,
       action: 'CREATE',
       new_value: params.metadata as Json,
-      performed_by: params.user_id || null
+      user_id: params.user_id || null
     })
 
     return { success: true, record: newRecord }
@@ -257,7 +257,7 @@ export async function advanceRecordStage(params: {
       action: 'STAGE_COMPLETED',
       old_value: { stage_id: params.current_stage_id },
       new_value: { stage_id: params.next_stage_id || 'COMPLETED' },
-      performed_by: params.user_id || null
+      user_id: params.user_id || null
     })
 
     if (params.next_stage_id) {
@@ -398,7 +398,7 @@ export async function seedInitialDatabase(): Promise<{ success: boolean; message
 
     
     // Ensure outward stages exist
-    const { data: stOut } = await supabase.from('workflow_stages').select('id, stage_number').eq('workflow_id', outwardWfId);
+    const { data: stOut } = await supabase.from('workflow_stages').select('id, stage_number').eq('workflow_id', outwardWfId as string);
     const outStage1 = stOut?.find(s => s.stage_number === 1)?.id;
     
     // Seed fields for outward stage 1 if missing
@@ -425,14 +425,13 @@ export async function seedInitialDatabase(): Promise<{ success: boolean; message
         let order = 1;
         for (const f of fields) {
           await supabase.from('workflow_fields').insert({
-            workflow_id: outwardWfId,
+            workflow_id: outwardWfId as string,
             stage_id: outStage1,
             field_key: f.field_key,
             field_label: f.field_label,
-            data_type: f.data_type,
+            data_type: f.data_type as any,
             is_required: f.is_required,
             display_order: order++,
-            is_active: true,
             configuration: {}
           });
         }
@@ -440,7 +439,7 @@ export async function seedInitialDatabase(): Promise<{ success: boolean; message
     }
 
     // Ensure inward stages exist
-    const { data: stIn } = await supabase.from('workflow_stages').select('id, stage_number').eq('workflow_id', inwardWfId);
+    const { data: stIn } = await supabase.from('workflow_stages').select('id, stage_number').eq('workflow_id', inwardWfId as string);
     const inStage1 = stIn?.find(s => s.stage_number === 1)?.id;
     
     // Seed fields for inward stage 1 if missing
@@ -462,14 +461,13 @@ export async function seedInitialDatabase(): Promise<{ success: boolean; message
         let order = 1;
         for (const f of fields) {
           await supabase.from('workflow_fields').insert({
-            workflow_id: inwardWfId,
+            workflow_id: inwardWfId as string,
             stage_id: inStage1,
             field_key: f.field_key,
             field_label: f.field_label,
-            data_type: f.data_type,
+            data_type: f.data_type as any,
             is_required: f.is_required,
             display_order: order++,
-            is_active: true,
             configuration: {}
           });
         }
